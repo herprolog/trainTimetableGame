@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>運行ダイヤグラム指令盤 - 東海道・伊豆線 (Train Dispatcher)</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- 上部コンパクトステータスバー -->
+  <header class="header">
+    <div class="brand-section">
+      <span style="font-size: 20px;">🚆</span>
+      <span class="brand-title">東海道・伊豆線 ダイヤ盤</span>
+    </div>
+
+    <!-- 難易度セレクタ (3段階: 初級・中級・上級) -->
+    <div class="difficulty-controls">
+      <button class="diff-btn" data-diff="easy" title="初級: 毎時4本 (ゆったり)">🟢 初級</button>
+      <button class="diff-btn active" data-diff="normal" title="中級: 毎時7本 (標準)">🟡 中級</button>
+      <button class="diff-btn" data-diff="hard" title="上級: 毎時14本 (実ダイヤ級過密)">🔴 上級 (過密)</button>
+    </div>
+
+    <!-- 運行ステータス (最低限) -->
+    <div class="status-bar">
+      <div class="stat-item">
+        <span class="stat-label">現在時刻</span>
+        <span id="digitalClock" class="stat-value digital-clock">08:00:00</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">総遅延</span>
+        <span id="totalDelayDisplay" class="stat-value val-good">+0分0秒</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">スコア</span>
+        <span id="scoreRankDisplay" class="stat-value val-good">100点 (S)</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">支障</span>
+        <span id="incidentCountDisplay" class="stat-value val-good">0件</span>
+      </div>
+    </div>
+
+    <!-- アクションコントロール (最低限) -->
+    <div class="header-actions">
+      <!-- タイムスケール -->
+      <div class="speed-controls">
+        <button class="speed-btn" data-speed="0">⏸</button>
+        <button class="speed-btn active" data-speed="1">1x</button>
+        <button class="speed-btn" data-speed="2">2x</button>
+        <button class="speed-btn" data-speed="5">5x</button>
+      </div>
+
+      <button id="btnScrollNow" class="btn btn-outline" style="border-color: #ef4444; color: #ef4444; padding: 4px 10px;" title="現在時刻へスクロール">🔴 現在時刻</button>
+      <button id="btnOpenTrainList" class="btn btn-outline" style="padding: 4px 10px;">📋 列車一覧</button>
+      <button id="btnOpenHelp" class="btn btn-outline" style="padding: 4px 10px;">ℹ️ ガイド</button>
+    </div>
+  </header>
+
+  <!-- フルスクリーン ダイヤグラムコンテナ -->
+  <main class="diagram-container">
+    <canvas id="diagramCanvas"></canvas>
+
+    <!-- 衝突警告フローティングバナー (衝突発生時に赤色表示) -->
+    <div id="conflictAlertBanner" class="conflict-alert-banner hidden">
+      <span class="alert-icon">🚨</span>
+      <span id="conflictAlertText" class="alert-text">単線正面衝突の危険があります！スジをドラッグして交換可能駅で行き違いさせてください</span>
+    </div>
+
+    <!-- スジドラッグ確定フローティングバー (ドラッグ移動後に表示) -->
+    <div id="confirmBar" class="confirm-floating-bar hidden">
+      <div id="confirmMsg" class="confirm-text">
+        <strong>列車</strong> のスジを移動しました。
+      </div>
+      <div class="confirm-actions">
+        <button id="btnCommitShift" class="btn btn-success">✓ この変更を確定する (Enter)</button>
+        <button id="btnCancelShift" class="btn btn-outline">✕ 取消 (Esc)</button>
+      </div>
+    </div>
+
+    <!-- 右下フロート通報ログ -->
+    <div class="floating-log-panel">
+      <div class="floating-log-header">
+        <span>📢 運行速報・指令ログ</span>
+      </div>
+      <div id="eventLogList" class="log-scroll-area"></div>
+    </div>
+  </main>
+
+  <!-- トースト通知エリア -->
+  <div id="toastArea" class="toast-area"></div>
+
+  <!-- 1. スジ交点ノード編集モーダル (時刻手入力＆番線変更) -->
+  <div id="nodeModal" class="modal-backdrop hidden">
+    <div class="modal-window" style="width: 400px;">
+      <div class="modal-header">
+        <span class="modal-title">⏱️ 駅発着時刻・番線変更</span>
+        <button id="btnCloseNode" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="background: #090e1a; padding: 10px; border-radius: 6px; margin-bottom: 14px; font-size: 13px;">
+          <div>対象列車: <strong id="nodeTrainName" style="color: #38bdf8;">--</strong></div>
+          <div>対象駅: <strong id="nodeStationName" style="color: #f8fafc;">--</strong></div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">到着時刻 (HH:MM:SS)</label>
+          <input type="text" id="nodeArrInput" class="form-input" placeholder="09:15:00">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">出発時刻 (HH:MM:SS)</label>
+          <input type="text" id="nodeDepInput" class="form-input" placeholder="09:16:00">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">着発番線 (プラットフォーム)</label>
+          <select id="nodeTrackSelect" class="form-select"></select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-checkbox-label">
+            <input type="checkbox" id="nodeHoldCheck">
+            <span>発車抑止 (HOLD) を設定する</span>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btnSaveNode" class="btn btn-primary">✓ 変更を反映する</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. 駅構内配線略図ポップアップ (駅名クリック時) -->
+  <div id="yardModal" class="modal-backdrop hidden">
+    <div class="modal-window" style="width: 660px;">
+      <div class="modal-header">
+        <span id="yardStationName" class="modal-title">駅構内配線略図</span>
+        <button id="btnCloseYard" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <canvas id="yardCanvas" width="620" height="220" style="display: block; border-radius: 6px; border: 1px solid #1e293b;"></canvas>
+        <pre id="yardInfoText" style="margin-top: 12px; font-size: 12px; color: #94a3b8; line-height: 1.5; white-space: pre-wrap;"></pre>
+      </div>
+      <div class="modal-footer">
+        <button onclick="document.getElementById('yardModal').classList.add('hidden')" class="btn btn-outline">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. 在線列車一覧モーダル -->
+  <div id="trainListModal" class="modal-backdrop hidden">
+    <div class="modal-window" style="width: 640px;">
+      <div class="modal-header">
+        <span class="modal-title">📋 運行列車一覧 (東海道・伊豆線)</span>
+        <button id="btnCloseTrainList" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 0;">
+        <div class="train-table-wrapper">
+          <table class="train-table">
+            <thead>
+              <tr>
+                <th>列車名</th>
+                <th>種別</th>
+                <th>行先</th>
+                <th>現在地</th>
+                <th>状態</th>
+                <th>遅延</th>
+              </tr>
+            </thead>
+            <tbody id="trainTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button onclick="document.getElementById('trainListModal').classList.add('hidden')" class="btn btn-outline">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. 操作方法ヘルプモーダル -->
+  <div id="helpModal" class="modal-backdrop hidden">
+    <div class="modal-window" style="width: 580px;">
+      <div class="modal-header">
+        <span class="modal-title">ℹ️ ダイヤグラム運転整理 操作ガイド</span>
+        <button id="btnCloseHelp" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body" style="font-size: 13px; line-height: 1.7; color: #cbd5e1;">
+        <h4 style="color: #38bdf8; margin-bottom: 6px;">1. ダイヤグラムのスクロールと操作</h4>
+        <ul style="margin-left: 20px; margin-bottom: 12px;">
+          <li><strong>マウスホイール (上下回転)</strong>: ダイヤグラムをスムーズに<strong>縦スクロール</strong>（東京〜下田の全41駅を自由に上下移動）。</li>
+          <li><strong>Shift + マウスホイール / 横ホイール</strong>: 時間軸の<strong>横スクロール</strong>。</li>
+          <li><strong>画面下端の横スクロールバー</strong>: ドラッグして時間帯（08:00〜11:30）を素早く横移動。</li>
+          <li><strong>画面上部の時間ボタン [◀ 30分] [🔴 現在時刻] [30分 ▶]</strong>: ワンクリックで時間横ジャンプ。</li>
+          <li><strong>画面上部の駅ボタン [東京][横浜][熱海][伊東][下田]</strong>: 目的の駅へワンクリックで縦ジャンプ。</li>
+          <li><strong>画面右端の縦スクロールバー</strong>: ドラッグして全区間を一気に移動。</li>
+          <li><strong>キーボード矢印キー (← → ↑ ↓)</strong>: 画面を上下左右にスムーズスクロール。</li>
+          <li><strong>Ctrl + ホイール / 🔍+ 🔍- ボタン</strong>: ダイヤグラムの拡大・縮小ズーム。</li>
+        </ul>
+
+        <h4 style="color: #facc15; margin-bottom: 6px;">2. スジ（列車線）のドラッグ＆確定（新仕様）</h4>
+        <ul style="margin-left: 20px; margin-bottom: 12px;">
+          <li><strong>前倒し禁止</strong>: スジを過去方向（早発）へずらすことはできません（0秒以上のみ）。</li>
+          <li><strong>出発駅以降のみ遅延</strong>: カーソルを合わせた線の<strong>出発駅以降のみが出発遅延</strong>し、それ以前の駅はそのまま維持されます。</li>
+          <li><strong>最小停車時間30秒＆自動遅延回復</strong>: 駅での停車時間は必ず30秒以上確保されます。元々1分や2分停車する予定だった駅では停車時間を30秒に短縮し、<strong>自動で遅延が縮小・回復</strong>します！</li>
+          <li>ドラッグを離すと画面下に<strong>「✓ この変更を確定する」</strong>ボタンが出現し、確定を押すとシミュレーションに反映されます。</li>
+        </ul>
+
+        <h4 style="color: #ef4444; margin-bottom: 6px;">3. 衝突・支障の赤色警告表示</h4>
+        <ul style="margin-left: 20px; margin-bottom: 12px;">
+          <li>単線区間での駅間正面衝突や、駅間追突・番線重複が予測される場合、<strong>ダイヤグラム上のスジと交点が赤色に光り、警告マーカー（🚨）が表示</strong>されます。</li>
+          <li>スジをドラッグして交換可能駅で行き違いさせると、危険が解消されて通常色に戻ります。</li>
+        </ul>
+
+        <h4 style="color: #10b981; margin-bottom: 6px;">4. 駅交点クリック・配線図・難易度</h4>
+        <ul style="margin-left: 20px;">
+          <li>スジ上の駅交点（丸印）をクリックすると、<strong>発着時刻の手入力</strong>や<strong>番線変更</strong>、<strong>発車抑止(HOLD)</strong>が可能です。</li>
+          <li>左側の<strong>「駅名」をクリック</strong>すると、その駅の構内配線略図（番線・信号・在線列車）が表示されます。</li>
+          <li>画面上部の<strong>[初級][中級][上級]</strong>ボタンで難易度を切り替えられます（上級は実ダイヤ級の超過密運行！）。</li>
+        </ul>
+      </div>
+      <div class="modal-footer">
+        <button onclick="document.getElementById('helpModal').classList.add('hidden')" class="btn btn-primary">了解</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. 運行完了リザルトモーダル -->
+  <div id="resultModal" class="modal-backdrop hidden">
+    <div class="modal-window" style="width: 440px; text-align: center;">
+      <div class="modal-body" style="padding: 30px;">
+        <h2 style="font-size: 22px; margin-bottom: 6px;">🏁 本日の運転整理 完了</h2>
+        <p class="text-muted" style="font-size: 13px;">東海道・伊豆線の全列車運行が終了しました。</p>
+        
+        <div id="finalRank" style="font-size: 58px; font-weight: 900; color: #facc15; margin: 12px 0; text-shadow: 0 0 16px rgba(250, 204, 21, 0.5);">S</div>
+        
+        <div style="background: #090e1a; padding: 14px; border-radius: 8px; margin-bottom: 20px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;">
+          <div>
+            <div style="font-size: 10px; color: #94a3b8;">総合スコア</div>
+            <div id="finalScore" style="font-size: 16px; font-weight: bold; color: #10b981; margin-top: 4px;">95点</div>
+          </div>
+          <div>
+            <div style="font-size: 10px; color: #94a3b8;">総遅延時間</div>
+            <div id="finalDelay" style="font-size: 16px; font-weight: bold; color: #f59e0b; margin-top: 4px;">4分</div>
+          </div>
+          <div>
+            <div style="font-size: 10px; color: #94a3b8;">インシデント</div>
+            <div id="finalIncidents" style="font-size: 16px; font-weight: bold; color: #10b981; margin-top: 4px;">0件</div>
+          </div>
+        </div>
+
+        <button id="restartBtn" class="btn btn-primary" style="padding: 10px 24px; font-size: 14px; width: 100%;">
+          🔄 ダイヤをリセットして再挑戦
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- スクリプト読み込み -->
+  <script src="js/config.js"></script>
+  <script src="js/models.js"></script>
+  <script src="js/simulation.js"></script>
+  <script src="js/renderer.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/main.js"></script>
+
+</body>
+</html>
